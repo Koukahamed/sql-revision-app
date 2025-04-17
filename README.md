@@ -31,4 +31,4 @@ Permettre aux étudiants, débutants ou professionnels en reconversion, de **s�
 
 ## 📎 Accès
 
-- 🔗 **Application en ligne** : [Lien vers l'app Streamlit](sql-revision.streamlit.app)  
+- 🔗 **Application en ligne** : [Lien vers l'app Streamlit](https://sql-revision.streamlit.app/)  
