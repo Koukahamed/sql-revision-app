@@ -1,986 +1,593 @@
 import random
 import sqlite3
 from sqlite3 import Error
+
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-import plotly.express as px
-import time
 
-# Configuration de la page
+# Assurez-vous que graphviz est disponible si vous utilisez une version locale de Streamlit
+# Si ce n'est pas le cas, le diagramme sera affiché en code.
+
+# --- Configuration de la Page et Styles ---
 st.set_page_config(
-    page_title="SQL Révision App",
+    page_title="SQL Sandbox",
     layout="wide",
-    page_icon="📊",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Fonction pour créer une connexion à une base de données SQLite en mémoire
+# --- 1. Définitions des Schémas (Graphviz DOT Language) ---
+
+HR_ERD = """
+digraph G {
+    graph [rankdir=LR, layout=dot, bgcolor="#f0f2f6", fontname="Inter"];
+    node [shape=box, style="filled,rounded", color="#0058b8", fontcolor=white, fontname="Inter"];
+    edge [color="#4a4a4a", fontname="Inter", fontsize=10];
+
+    subgraph cluster_hr {
+        label = "Ressources Humaines (HR)";
+        bgcolor="#ffffff";
+        
+        employees [label="{employees|id (PK)|name|age|department|salary}", fillcolor="#3498db"];
+        departments [label="{departments|id (PK)|name|manager_id (FK)|budget}", fillcolor="#2ecc71"];
+
+        employees -> departments [label="gère", taillabel="1", headlabel="1..*"];
+        employees -> departments [label="appartient à", taillabel="*..1", headlabel="1"];
+
+        employees:department -> departments:name [dir=none, style=dotted, label="relation logique"];
+        departments:manager_id -> employees:id;
+    }
+}
+"""
+
+LIBRARY_ERD = """
+digraph G {
+    graph [rankdir=LR, layout=dot, bgcolor="#f0f2f6", fontname="Inter"];
+    node [shape=box, style="filled,rounded", color="#0058b8", fontcolor=white, fontname="Inter"];
+    edge [color="#4a4a4a", fontname="Inter", fontsize=10];
+
+    subgraph cluster_library {
+        label = "Système de Bibliothèque";
+        bgcolor="#ffffff";
+
+        books [label="{books|id (PK)|title|author|category|publish_year}", fillcolor="#3498db"];
+        members [label="{members|id (PK)|name|email|join_date}", fillcolor="#2ecc71"];
+        loans [label="{loans|id (PK)|book_id (FK)|member_id (FK)|loan_date|return_date}", fillcolor="#e74c3c"];
+
+        members -> loans [label="emprunte", taillabel="1..*", headlabel="1"];
+        books -> loans [label="est emprunté", taillabel="1..*", headlabel="1"];
+        
+        loans:book_id -> books:id;
+        loans:member_id -> members:id;
+    }
+}
+"""
+
+# --- 2. Jeux de Données et Schémas ---
+
+SCHEMAS = {
+    "HR": {
+        "title": "Ressources Humaines (HR)",
+        "erd": HR_ERD,
+        "tables": {
+            "employees": {
+                "ddl": "id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, department TEXT, salary REAL",
+                "data": [
+                    (1, 'Jean Dupont', 35, 'IT', 55000), (2, 'Marie Lefebvre', 42, 'Marketing', 62000),
+                    (3, 'Pierre Martin', 28, 'IT', 48000), (4, 'Sophie Bernard', 31, 'RH', 51000),
+                    (5, 'Thomas Dubois', 45, 'Finance', 75000), (6, 'Lucie Moreau', 29, 'Marketing', 59000),
+                    (7, 'David Petit', 50, 'Finance', 80000), (8, 'Laura Simon', 33, 'IT', 55000)
+                ],
+                "columns": ['id', 'name', 'age', 'department', 'salary']
+            },
+            "departments": {
+                "ddl": "id INTEGER PRIMARY KEY, name TEXT NOT NULL, manager_id INTEGER, budget REAL",
+                "data": [
+                    (1, 'IT', 1, 500000), (2, 'Marketing', 2, 350000),
+                    (3, 'RH', 4, 200000), (4, 'Finance', 5, 750000)
+                ],
+                "columns": ['id', 'name', 'manager_id', 'budget']
+            }
+        }
+    },
+    "Library": {
+        "title": "Bibliothèque (Library)",
+        "erd": LIBRARY_ERD,
+        "tables": {
+            "books": {
+                "ddl": "id INTEGER PRIMARY KEY, title TEXT, author TEXT, category TEXT, publish_year INTEGER",
+                "data": [
+                    (101, 'Data Science 101', 'A. Smith', 'Science', 2019), (102, 'SQL Mastery', 'B. Jones', 'Informatique', 2022),
+                    (103, 'Python Basics', 'C. Hall', 'Informatique', 2020), (104, 'Deep Learning', 'D. King', 'Science', 2023),
+                    (105, 'La Peste', 'Albert Camus', 'Fiction', 1947), (106, '1984', 'George Orwell', 'Fiction', 1949)
+                ],
+                "columns": ['id', 'title', 'author', 'category', 'publish_year']
+            },
+            "members": {
+                "ddl": "id INTEGER PRIMARY KEY, name TEXT, email TEXT, join_date TEXT",
+                "data": [
+                    (1, 'Alex Durand', 'alex@mail.com', '2023-01-01'), (2, 'Emma Leroy', 'emma@mail.com', '2023-03-15'),
+                    (3, 'Marc Riviere', 'marc@mail.com', '2023-05-20')
+                ],
+                "columns": ['id', 'name', 'email', 'join_date']
+            },
+            "loans": {
+                "ddl": "id INTEGER PRIMARY KEY, book_id INTEGER, member_id INTEGER, loan_date TEXT, return_date TEXT",
+                "data": [
+                    (1, 101, 1, '2023-10-01', '2023-10-15'), (2, 103, 2, '2023-10-05', '2023-10-20'),
+                    (3, 102, 1, '2023-11-01', None), (4, 106, 3, '2023-11-02', None),
+                ],
+                "columns": ['id', 'book_id', 'member_id', 'loan_date', 'return_date']
+            }
+        }
+    }
+}
+
+# --- 3. Questions et Exercices ---
+
+quiz_questions = [
+    {"q": "Quelle commande SQL est utilisée pour récupérer des données d'une table?", "o": ["SELECT", "UPDATE", "DELETE", "INSERT"], "c": "SELECT"},
+    {"q": "Comment joindre deux tables en SQL?", "o": ["MERGE", "COMBINE", "JOIN", "CONNECT"], "c": "JOIN"},
+    {"q": "Quelle clause est utilisée pour filtrer les résultats d'une requête SQL?", "o": ["FILTER", "HAVING", "GROUP", "WHERE"], "c": "WHERE"},
+    {"q": "Comment trier les résultats d'une requête SQL par ordre croissant?", "o": ["SORT BY", "ORDER BY ... ASC", "ORDER ASC", "ARRANGE BY"], "c": "ORDER BY ... ASC"},
+    {"q": "Quelle fonction SQL est utilisée pour compter le nombre d'enregistrements?", "o": ["SUM()", "COUNT()", "TOTAL()", "NUM()"], "c": "COUNT()"},
+    {"q": "Quel opérateur est utilisé pour comparer des valeurs partielles?", "o": ["MATCH", "LIKE", "CONTAINS", "PATTERN"], "c": "LIKE"},
+    {"q": "Quelle clause filtre les résultats AGREGÉS?", "o": ["WHERE", "FILTER BY", "GROUP BY", "HAVING"], "c": "HAVING"},
+    {"q": "Quel type de JOIN retourne toutes les lignes de la table de GAUCHE?", "o": ["INNER JOIN", "RIGHT JOIN", "FULL JOIN", "LEFT JOIN"], "c": "LEFT JOIN"},
+]
+
+exercises = {
+    "HR": {
+        "Débutant": [
+            {"title": "Employés IT", "desc": "Sélectionnez le nom et le salaire de tous les employés du département 'IT'. Triez par salaire croissant.", "expected": "SELECT name, salary FROM employees WHERE department = 'IT' ORDER BY salary ASC;"},
+            {"title": "Salaires Élevés", "desc": "Trouvez le nom et l'âge de l'employé avec le salaire le plus élevé.", "expected": "SELECT name, age FROM employees ORDER BY salary DESC LIMIT 1;"},
+        ],
+        "Intermédiaire": [
+            {"title": "Salaire Moyen par Dept", "desc": "Affichez le nom du département et son salaire moyen, mais seulement pour les départements ayant un salaire moyen supérieur à 55000. Nommez la moyenne 'avg_salary'. Triez par salaire moyen décroissant.", "expected": "SELECT department, AVG(salary) as avg_salary FROM employees GROUP BY department HAVING avg_salary > 55000 ORDER BY avg_salary DESC;"},
+            {"title": "Managers et Budget", "desc": "Affichez le nom du manager, le nom du département qu'il gère et le budget de ce département. Utilisez la jointure sur l'ID du manager. Triez par budget croissant.", "expected": "SELECT e.name AS manager_name, d.name AS department_name, d.budget FROM employees e JOIN departments d ON e.id = d.manager_id ORDER BY d.budget ASC;"},
+        ],
+        "Avancé": [
+            {"title": "Supérieur à la Moyenne", "desc": "Trouvez le nom et le salaire des employés qui gagnent plus que la moyenne des salaires de leur propre département. Triez par salaire.", "expected": "SELECT e1.name, e1.salary, e1.department FROM employees e1 WHERE e1.salary > (SELECT AVG(e2.salary) FROM employees e2 WHERE e2.department = e1.department) ORDER BY e1.salary DESC;"},
+            {"title": "Classement des Salaires", "desc": "Affichez le nom, le département et le salaire de chaque employé, et ajoutez une colonne 'rank' indiquant le rang de leur salaire au sein de leur département (le plus haut salaire est rang 1).", "expected": "SELECT name, department, salary, RANK() OVER (PARTITION BY department ORDER BY salary DESC) as salary_rank FROM employees ORDER BY department, salary_rank;"},
+        ]
+    },
+    "Library": {
+        "Débutant": [
+            {"title": "Livres d'Informatique", "desc": "Sélectionnez le titre et l'auteur de tous les livres de la catégorie 'Informatique'.", "expected": "SELECT title, author FROM books WHERE category = 'Informatique';"},
+            {"title": "Livres Anciens", "desc": "Comptez le nombre de livres publiés avant 2000. Nommez la colonne 'count_old_books'.", "expected": "SELECT COUNT(id) AS count_old_books FROM books WHERE publish_year < 2000;"},
+        ],
+        "Intermédiaire": [
+            {"title": "Emprunts Actifs", "desc": "Affichez le nom du membre et le titre du livre qu'il a actuellement en prêt (return_date est NULL). Triez par nom du membre.", "expected": "SELECT m.name, b.title FROM members m JOIN loans l ON m.id = l.member_id JOIN books b ON l.book_id = b.id WHERE l.return_date IS NULL ORDER BY m.name;"},
+            {"title": "Activité des Membres", "desc": "Comptez le nombre total de prêts (terminés ou non) par membre. Affichez le nom du membre et le compte. Triez par le nombre de prêts décroissant.", "expected": "SELECT m.name, COUNT(l.id) AS total_loans FROM members m JOIN loans l ON m.id = l.member_id GROUP BY m.name ORDER BY total_loans DESC;"},
+        ],
+        "Avancé": [
+            {"title": "Livres Jamais Empruntés", "desc": "Trouvez le titre des livres qui n'ont jamais été empruntés. Triez par titre.", "expected": "SELECT title FROM books WHERE id NOT IN (SELECT DISTINCT book_id FROM loans) ORDER BY title;"},
+            {"title": "Membres les Plus Actifs", "desc": "Trouvez le nom du membre ayant le plus grand nombre de prêts actifs (return_date est NULL).", "expected": "SELECT m.name, COUNT(l.id) as active_loans FROM members m JOIN loans l ON m.id = l.member_id WHERE l.return_date IS NULL GROUP BY m.name ORDER BY active_loans DESC LIMIT 1;"},
+        ]
+    }
+}
+
+
+# --- 4. Fonctions Utilitaires de Base de Données ---
+
+@st.cache_resource
 def create_connection():
-    conn = None
+    """Crée une connexion persistante à une base de données SQLite en mémoire."""
     try:
         conn = sqlite3.connect(":memory:")
         return conn
     except Error as e:
         st.error(f"Erreur de connexion SQLite: {e}")
-    return conn
+        return None
 
-# Initialisation de la base de données avec des données d'exemple
-def init_database(conn):
+def init_database(conn, db_type):
+    """Initialise le schéma et charge les données pour le type de base de données spécifié."""
     cursor = conn.cursor()
+    schema_data = SCHEMAS[db_type]
+    
+    # Supprimer toutes les tables précédentes
+    for table_name in schema_data["tables"].keys():
+        cursor.execute(f"DROP TABLE IF EXISTS {table_name};")
 
-    # Table des employés
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS employees (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            age INTEGER,
-            department TEXT,
-            salary REAL
-        )
-        """
-    )
-
-    # Table des départements
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS departments (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            manager_id INTEGER,
-            budget REAL,
-            FOREIGN KEY (manager_id) REFERENCES employees (id)
-        )
-        """
-    )
-
-    # Insertion de données d'exemple
-    cursor.execute(
-        """
-        INSERT INTO employees (id, name, age, department, salary)
-        VALUES
-            (1, 'Jean Dupont', 35, 'IT', 55000),
-            (2, 'Marie Lefebvre', 42, 'Marketing', 62000),
-            (3, 'Pierre Martin', 28, 'IT', 48000),
-            (4, 'Sophie Bernard', 31, 'RH', 51000),
-            (5, 'Thomas Dubois', 45, 'Finance', 75000)
-        """
-    )
-
-    cursor.execute(
-        """
-        INSERT INTO departments (id, name, manager_id, budget)
-        VALUES
-            (1, 'IT', 1, 500000),
-            (2, 'Marketing', 2, 350000),
-            (3, 'RH', 4, 200000),
-            (4, 'Finance', 5, 750000)
-        """
-    )
-
+    # Créer les nouvelles tables et insérer les données
+    for table_name, data in schema_data["tables"].items():
+        # Création de la table
+        cursor.execute(f"CREATE TABLE {table_name} ({data['ddl']});")
+        
+        # Insertion des données via Pandas pour la simplicité et la robustesse
+        df = pd.DataFrame(data["data"], columns=data["columns"])
+        df.to_sql(table_name, conn, if_exists='replace', index=False)
+        
     conn.commit()
 
-# Questions pour le quiz SQL
-quiz_questions = [
-    {
-        "question": "Quelle commande SQL est utilisée pour récupérer des données d'une table?",
-        "options": ["SELECT", "UPDATE", "DELETE", "INSERT"],
-        "correct": "SELECT",
-        "explanation": "La commande `SELECT` est utilisée pour interroger et récupérer des données d'une ou plusieurs tables."
-    },
-    {
-        "question": "Comment joindre deux tables en SQL?",
-        "options": ["MERGE", "COMBINE", "JOIN", "CONNECT"],
-        "correct": "JOIN",
-        "explanation": "La clause `JOIN` permet de combiner les lignes de deux ou plusieurs tables en fonction d'une colonne commune."
-    },
-    {
-        "question": "Quelle clause est utilisée pour filtrer les résultats d'une requête SQL?",
-        "options": ["FILTER", "HAVING", "GROUP", "WHERE"],
-        "correct": "WHERE",
-        "explanation": "La clause `WHERE` permet de filtrer les résultats d'une requête en spécifiant une condition."
-    },
-    {
-        "question": "Comment trier les résultats d'une requête SQL par ordre croissant?",
-        "options": ["SORT BY", "ORDER BY ... ASC", "ORDER ASC", "ARRANGE BY"],
-        "correct": "ORDER BY ... ASC",
-        "explanation": "La clause `ORDER BY ... ASC` trie les résultats par ordre croissant. `ASC` est optionnel car c'est le comportement par défaut."
-    },
-    {
-        "question": "Quelle fonction SQL est utilisée pour compter le nombre d'enregistrements?",
-        "options": ["SUM()", "COUNT()", "TOTAL()", "NUM()"],
-        "correct": "COUNT()",
-        "explanation": "La fonction `COUNT()` retourne le nombre d'enregistrements dans une table ou une colonne."
-    },
-]
 
-# Exercices par niveau de difficulté
-exercises = {
-    "Débutant": [
-        {
-            "title": "Sélection de base",
-            "description": "Écrivez une requête pour sélectionner tous les employés du département IT.",
-            "expected": "SELECT * FROM employees WHERE department = 'IT';",
-            "hint": "Utilisez la clause WHERE pour filtrer les résultats.",
-            "expected_columns": "id, name, age, department, salary",
-        },
-        {
-            "title": "Calcul d'agrégation",
-            "description": "Calculez le salaire moyen des employés.",
-            "expected": "SELECT AVG(salary) as average_salary FROM employees;",
-            "hint": "Utilisez la fonction AVG() pour calculer la moyenne.",
-            "expected_columns": "average_salary",
-        },
-    ],
-    "Intermédiaire": [
-        {
-            "title": "Jointure de tables",
-            "description": "Affichez le nom de chaque employé avec le nom de son département et le budget du département.",
-            "expected": "SELECT e.name as employee_name, d.name as department_name, d.budget FROM employees e JOIN departments d ON e.department = d.name;",
-            "hint": "Utilisez JOIN pour combiner les données des deux tables.",
-            "expected_columns": "employee_name, department_name, budget",
-        },
-        {
-            "title": "Groupement et agrégation",
-            "description": "Affichez le salaire moyen par département, triés du plus élevé au plus bas.",
-            "expected": "SELECT department, AVG(salary) as avg_salary FROM employees GROUP BY department ORDER BY avg_salary DESC;",
-            "hint": "Utilisez GROUP BY pour regrouper les résultats et ORDER BY pour les trier.",
-            "expected_columns": "department, avg_salary",
-        },
-    ],
-    "Avancé": [
-        {
-            "title": "Sous-requêtes",
-            "description": "Trouvez les employés qui gagnent plus que la moyenne des salaires de leur département.",
-            "expected": "SELECT e1.name, e1.salary, e1.department FROM employees e1 WHERE e1.salary > (SELECT AVG(e2.salary) FROM employees e2 WHERE e2.department = e1.department);",
-            "hint": "Utilisez une sous-requête pour calculer la moyenne par département.",
-            "expected_columns": "name, salary, department",
-        },
-        {
-            "title": "Fonctions de fenêtrage",
-            "description": "Affichez chaque employé avec son classement de salaire dans son département (du plus élevé au plus bas).",
-            "expected": "SELECT name, department, salary, RANK() OVER (PARTITION BY department ORDER BY salary DESC) as salary_rank FROM employees;",
-            "hint": "Utilisez les fonctions de fenêtrage (RANK, PARTITION BY) pour créer des classements.",
-            "expected_columns": "name, department, salary, salary_rank",
-        },
-    ],
-}
+def compare_query_results(user_query, expected_query, conn):
+    """Exécute et compare les DataFrames résultants de la requête utilisateur et de la requête attendue."""
+    
+    def fetch_data(query):
+        cursor = conn.cursor()
+        cursor.execute(query)
+        data = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        return pd.DataFrame(data, columns=columns)
 
-# Fonction pour afficher la page d'accueil
+    try:
+        user_df = fetch_data(user_query)
+        expected_df = fetch_data(expected_query)
+    except Exception as e:
+        return False, None, f"Erreur d'exécution de la requête : {e}"
+
+    # 1. Vérification de la structure (Colonnes et Nombre de lignes)
+    if not user_df.columns.tolist() == expected_df.columns.tolist():
+        # Tentative de normalisation des noms de colonnes (casse)
+        user_cols_lower = [c.lower() for c in user_df.columns]
+        expected_cols_lower = [c.lower() for c in expected_df.columns]
+        
+        if not user_cols_lower == expected_cols_lower:
+            return False, user_df, "Les noms ou l'ordre des colonnes ne correspondent pas."
+
+    if len(user_df) != len(expected_df):
+        return False, user_df, f"Nombre de lignes incorrect. Attendu: {len(expected_df)}, Obtenu: {len(user_df)}."
+
+    # 2. Normalisation et Comparaison des valeurs
+    if user_df.empty and expected_df.empty:
+        return True, user_df, "Solution Correcte (résultat vide)."
+        
+    try:
+        # Assurer que les types sont cohérents pour la comparaison
+        user_df = user_df.astype(expected_df.dtypes)
+        
+        # Normaliser l'ordre des lignes en triant les deux DataFrames par toutes les colonnes
+        sort_cols = user_df.columns.tolist()
+        user_df_sorted = user_df.sort_values(by=sort_cols, ignore_index=True)
+        expected_df_sorted = expected_df.sort_values(by=sort_cols, ignore_index=True)
+        
+        # Comparaison finale
+        if user_df_sorted.equals(expected_df_sorted):
+            return True, user_df, "Solution Correcte."
+        else:
+            return False, user_df, "Les données retournées ne correspondent pas (vérifiez les valeurs, l'agrégation ou les alias)."
+    except Exception as e:
+        return False, user_df, f"Erreur lors de la normalisation/comparaison des résultats : {e}. Votre requête a pu s'exécuter mais le résultat est incorrect."
+
+
+# --- 5. Fonctions de Vues Streamlit ---
+
 def show_home():
-    st.header("Bienvenue dans l'application de révision SQL! 🎓")
-    st.write(
-        """
-        Cette application est conçue pour vous aider à réviser et à pratiquer vos compétences en SQL.
+    st.header("Bienvenue dans le SQL Sandbox! 🚀")
+    
+    st.markdown("""
+    Ceci est l'application d'apprentissage SQL que j'aurais aimé avoir. Elle vous permet de pratiquer
+    sur des bases de données réelles (en mémoire) sans vous soucier des erreurs.
+    """)
 
-        ### Fonctionnalités disponibles:
-        - **📝 Quiz SQL**: Testez vos connaissances en SQL avec des questions à choix multiples.
-        - **🔍 Testeur de Requêtes**: Écrivez et exécutez des requêtes SQL sur des bases de données d'exemple.
-        - **🗺️ Schémas de Base de Données**: Explorez les structures de base de données disponibles.
-        - **💪 Exercices Pratiques**: Résolvez des problèmes SQL pratiques et vérifiez vos solutions.
-        - **📚 Tutoriels**: Apprenez les concepts SQL pas à pas.
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(label="Schémas Disponibles", value=len(SCHEMAS))
+        st.markdown("🌐 Visualisez la structure de la BDD avec des diagrammes ER.")
+    with col2:
+        st.metric(label="Questions de Quiz", value=len(quiz_questions))
+        st.markdown("🧠 Testez vos connaissances théoriques rapidement.")
+    with col3:
+        total_exercises = sum(len(e) for db in exercises.values() for e in db.values())
+        st.metric(label="Exercices Pratiques", value=total_exercises)
+        st.markdown("✍️ Écrivez du SQL, exécutez-le, et obtenez un feedback immédiat.")
+        
+    st.info("💡 **Conseil :** Commencez par l'onglet **Schémas de Base de Données** pour sélectionner le jeu de données actif (HR par défaut).")
 
-        Utilisez la barre latérale pour naviguer entre les différentes sections.
-        """
-    )
-    st.info(
-        "💡 **Conseil**: SQL (Structured Query Language) est un langage standard pour la gestion des bases de données relationnelles. Pratiquez régulièrement pour maîtriser ses concepts!"
-    )
 
-# Fonction pour afficher le quiz SQL
 def show_quiz():
-    st.header("Quiz SQL 🧠")
-    st.write("Testez vos connaissances SQL avec ce quiz à choix multiples!")
+    st.header("Quiz SQL : Testez vos Fondamentaux 🧠")
 
-    if "quiz_score" not in st.session_state:
-        st.session_state.quiz_score = 0
-        st.session_state.questions_answered = 0
-        st.session_state.current_question = 0
-        st.session_state.questions = random.sample(quiz_questions, len(quiz_questions))
-        st.session_state.submitted = False
-        st.session_state.start_time = time.time()
-
-    # Barre de progression
-    progress = st.session_state.questions_answered / len(st.session_state.questions)
-    st.progress(progress)
-
-    if st.session_state.questions_answered < len(st.session_state.questions):
-        current_q = st.session_state.questions[st.session_state.current_question]
-        st.subheader(f"Question {st.session_state.current_question + 1} sur {len(st.session_state.questions)}")
-        st.write(current_q["question"])
-
-        user_answer = st.radio(
-            "Sélectionnez votre réponse:",
-            current_q["options"],
-            key=f"q_{st.session_state.current_question}",
-        )
-
-        if st.session_state.submitted:
-            if st.session_state.current_question < len(st.session_state.questions) - 1:
-                if st.button("Question suivante"):
-                    st.session_state.current_question += 1
-                    st.session_state.submitted = False
-                    st.rerun()
-        else:
-            if st.button("Soumettre"):
-                st.session_state.submitted = True
-                if user_answer == current_q["correct"]:
-                    st.session_state.quiz_score += 1
-                    st.success(f"Correct! ✅\n\n**Explication**: {current_q['explanation']}")
-                else:
-                    st.error(f"Incorrect! ❌\n\n**Explication**: {current_q['explanation']}\n\nLa bonne réponse est: **{current_q['correct']}**")
-
-                st.session_state.questions_answered += 1
-                if st.session_state.questions_answered < len(st.session_state.questions):
-                    st.rerun()
-    else:
-        elapsed_time = time.time() - st.session_state.start_time
-        st.success(f"Quiz terminé en {elapsed_time:.2f} secondes! 🎉\n\nVotre score est de {st.session_state.quiz_score}/{len(st.session_state.questions)}")
-
-        # Afficher une évaluation basée sur le score
-        score_percentage = (st.session_state.quiz_score / len(st.session_state.questions)) * 100
-        if score_percentage >= 80:
-            st.balloons()
-            st.write("🎉 **Excellent travail!** Vos connaissances SQL sont solides!")
-        elif score_percentage >= 60:
-            st.write("👍 **Bon travail!** Continuez à pratiquer pour améliorer vos compétences SQL.")
-        else:
-            st.write("📚 **Continuez à apprendre et à pratiquer.** Les bases de données SQL demandent de la pratique!")
-
-    if st.button("Recommencer le quiz"):
-        st.session_state.quiz_score = 0
-        st.session_state.questions_answered = 0
-        st.session_state.current_question = 0
-        st.session_state.questions = random.sample(quiz_questions, len(quiz_questions))
-        st.session_state.submitted = False
-        st.rerun()
-
-# Fonction pour afficher le testeur de requêtes
-@st.cache_data
-def load_data(conn, query):
-    cursor = conn.cursor()
-    cursor.execute(query)
-    results = cursor.fetchall()
-    column_names = [description[0] for description in cursor.description]
-    return pd.DataFrame(results, columns=column_names)
-
-def show_query_tester(conn):
-    st.header("Testeur de Requêtes SQL 🔍")
-    st.write(
-        """
-        Écrivez vos requêtes SQL et exécutez-les sur notre base de données d'exemple.
-        La base de données contient les tables **'employees'** et **'departments'**.
-        """
-    )
-
-    # Afficher le schéma de la base de données
-    with st.expander("📋 Voir le schéma de la base de données"):
-        st.code(
-            """
-            -- Table 'employees'
-            CREATE TABLE employees (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                age INTEGER,
-                department TEXT,
-                salary REAL
-            );
-
-            -- Table 'departments'
-            CREATE TABLE departments (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                manager_id INTEGER,
-                budget REAL,
-                FOREIGN KEY (manager_id) REFERENCES employees (id)
-            );
-            """
-        )
-
-    # Zone de saisie pour la requête SQL
-    query = st.text_area(
-        "Écrivez votre requête SQL ici:",
-        height=150,
-        value="SELECT * FROM employees;"
-    )
-
-    # Exécution de la requête
-    if st.button("Exécuter la requête"):
-        try:
-            df = load_data(conn, query)
-            st.subheader("📊 Résultats:")
-            st.dataframe(df)
-
-            # Visualisation des données
-            if "salary" in df.columns:
-                st.subheader("📈 Visualisation des salaires")
-                fig = px.bar(df, x="name", y="salary", title="Salaire par employé")
-                st.plotly_chart(fig)
-
-            st.info(f"✅ La requête a retourné {len(df)} enregistrement(s).")
-
-            # Historique des requêtes
-            if "query_history" not in st.session_state:
-                st.session_state.query_history = []
-            st.session_state.query_history.append(query)
-
-            # Afficher l'historique
-            with st.expander("🕰️ Historique des requêtes"):
-                for i, q in enumerate(st.session_state.query_history):
-                    st.code(q)
-
-        except Exception as e:
-            st.error(f"❌ Erreur d'exécution de la requête: {e}")
-
-    # Exemples de requêtes
-    with st.expander("💡 Exemples de requêtes"):
-        st.code("SELECT * FROM employees WHERE department = 'IT';")
-        st.code("SELECT e.name, d.name as department_name FROM employees e JOIN departments d ON e.department = d.name;")
-        st.code("SELECT department, AVG(salary) as avg_salary FROM employees GROUP BY department;")
-
-# Fonction pour afficher les schémas de base de données
-def show_schemas(conn):
-    st.header("Schémas de Base de Données 🗺️")
-    st.write(
-        """
-        Explorez les schémas de base de données disponibles pour comprendre la structure des données.
-        """
-    )
-
-    # Sélection du schéma à afficher
-    schema_type = st.selectbox(
-        "Sélectionnez un schéma:",
-        ["Employés & Départements", "Commerce en ligne", "Bibliothèque"],
-    )
-
-    if schema_type == "Employés & Départements":
-        st.subheader("Schéma Employés & Départements")
-
-        # Description du schéma
-        st.write(
-            """
-            Ce schéma représente une structure simple pour la gestion des employés et des départements d'une entreprise.
-            """
-        )
-
-        # Afficher le schéma sous forme de diagramme
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Table `employees`**")
-            st.code(
-                """
-                CREATE TABLE employees (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    age INTEGER,
-                    department TEXT,
-                    salary REAL
-                );
-                """
-            )
-            # Afficher les données d'exemple
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM employees")
-            results = cursor.fetchall()
-            column_names = [description[0] for description in cursor.description]
-            df_employees = pd.DataFrame(results, columns=column_names)
-            st.dataframe(df_employees)
-
-        with col2:
-            st.markdown("**Table `departments`**")
-            st.code(
-                """
-                CREATE TABLE departments (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    manager_id INTEGER,
-                    budget REAL,
-                    FOREIGN KEY (manager_id) REFERENCES employees (id)
-                );
-                """
-            )
-            # Afficher les données d'exemple
-            cursor.execute("SELECT * FROM departments")
-            results = cursor.fetchall()
-            column_names = [description[0] for description in cursor.description]
-            df_departments = pd.DataFrame(results, columns=column_names)
-            st.dataframe(df_departments)
-
-    elif schema_type == "Commerce en ligne":
-        st.subheader("Schéma Commerce en ligne")
-        st.write(
-            """
-            Ce schéma représente une structure typique pour une application de commerce en ligne.
-            *(Les données ne sont pas chargées dans la base de données actuelle, ceci est juste un exemple conceptuel.)*
-            """
-        )
-        st.code(
-            """
-            +---------------+      +---------------+      +----------------+
-            | customers     |      | orders        |      | products       |
-            +---------------+      +---------------+      +----------------+
-            | id (PK)       |      | id (PK)       |      | id (PK)        |
-            | name          |      | customer_id (FK)     | name           |
-            | email         |      | order_date    |      | description    |
-            | address       |      | total_amount  |      | price          |
-            | phone         |      | status        |      | category       |
-            +---------------+      +---------------+      +----------------+
-                     |                      |                       |
-                     |                      |                       |
-                     +----------------------+-----------------------+
-                                            |
-                                    +----------------+
-                                    | order_items     |
-                                    +----------------+
-                                    | order_id (FK)   |
-                                    | product_id (FK)|
-                                    | quantity       |
-                                    | unit_price     |
-                                    +----------------+
-            """
-        )
-
-    elif schema_type == "Bibliothèque":
-        st.subheader("Schéma Bibliothèque")
-        st.write(
-            """
-            Ce schéma représente une structure pour la gestion d'une bibliothèque.
-            *(Les données ne sont pas chargées dans la base de données actuelle, ceci est juste un exemple conceptuel.)*
-            """
-        )
-        st.code(
-            """
-            +---------------+      +----------------+      +---------------+
-            | books         |      | loans          |      | members       |
-            +---------------+      +----------------+      +---------------+
-            | id (PK)       |      | id (PK)        |      | id (PK)       |
-            | title         |      | book_id (FK)   |      | name          |
-            | author        |      | member_id (FK) |      | email         |
-            | isbn          |      | loan_date      |      | address       |
-            | category      |      | return_date    |      | join_date     |
-            | publish_year  |      | returned       |      | status        |
-            +---------------+      +----------------+      +---------------+
-            """
-        )
-
-# Fonction pour afficher les exercices pratiques
-def show_exercises(conn):
-    st.header("Exercices Pratiques SQL 💪")
-    st.write(
-        """
-        Pratiquez vos compétences SQL en résolvant des exercices de difficulté variée.
-        **Nouveautés** :
-        - Exercices de création/modification de tables.
-        - Exercices de mise à jour et suppression.
-        - Suivi de vos progrès.
-        - Solutions alternatives et astuces avancées.
-        """
-    )
-
-    # Initialisation du suivi des progrès
-    if "exercise_progress" not in st.session_state:
-        st.session_state.exercise_progress = {
-            "Débutant": {"completed": set(), "unlocked": True},
-            "Intermédiaire": {"completed": set(), "unlocked": False},
-            "Avancé": {"completed": set(), "unlocked": False}
+    if "quiz_state" not in st.session_state:
+        st.session_state.quiz_state = {
+            "score": 0,
+            "current_index": 0,
+            "questions": random.sample(quiz_questions, len(quiz_questions)),
+            "submitted": False,
+            "done": False,
         }
 
-    # Vérifier si un niveau est déverrouillé
-    def is_unlocked(difficulty):
-        if difficulty == "Débutant":
-            return True
-        elif difficulty == "Intermédiaire":
-            return len(st.session_state.exercise_progress["Débutant"]["completed"]) >= 2
-        elif difficulty == "Avancé":
-            return len(st.session_state.exercise_progress["Intermédiaire"]["completed"]) >= 2
+    state = st.session_state.quiz_state
 
-    # Mettre à jour l'état de déverrouillage
-    for difficulty in ["Intermédiaire", "Avancé"]:
-        st.session_state.exercise_progress[difficulty]["unlocked"] = is_unlocked(difficulty)
+    if state["done"]:
+        score_percentage = (state["score"] / len(state["questions"])) * 100
+        st.success(
+            f"Quiz terminé! Votre score final est de **{state['score']}/{len(state['questions'])}** ({score_percentage:.0f}%)"
+        )
+        if score_percentage >= 80: st.balloons(); st.markdown("## Bravo! Vous maîtrisez le SQL! 🎉")
+        elif score_percentage >= 60: st.markdown("## Bien joué! Continuez à pratiquer. 👍")
+        else: st.markdown("## Continuez à apprendre! Lisez la documentation pour vous améliorer. 📚")
+
+        if st.button("Recommencer le quiz"):
+            st.session_state.quiz_state = {
+                "score": 0, "current_index": 0,
+                "questions": random.sample(quiz_questions, len(quiz_questions)),
+                "submitted": False, "done": False,
+            }
+            st.rerun()
+        return
+
+    current_q = state["questions"][state["current_index"]]
+    
+    with st.container(border=True):
+        st.subheader(f"Question {state['current_index'] + 1} sur {len(state['questions'])}")
+        st.markdown(f"**{current_q['q']}**")
+
+        form_key = f"quiz_form_{state['current_index']}"
+        with st.form(key=form_key):
+            user_answer = st.radio(
+                "Sélectionnez votre réponse :",
+                current_q["o"],
+                key=f"q_radio_{state['current_index']}",
+                disabled=state['submitted']
+            )
+            
+            col_sub, col_next = st.columns(2)
+            
+            with col_sub:
+                submit_button = st.form_submit_button("Soumettre la réponse", disabled=state['submitted'])
+
+            if submit_button and not state['submitted']:
+                state['submitted'] = True
+                if user_answer == current_q["c"]:
+                    state["score"] += 1
+                    st.session_state.feedback = "Correct! ✅"
+                else:
+                    st.session_state.feedback = f"Incorrect! La bonne réponse était : **{current_q['c']}** ❌"
+                st.rerun() # Rerun pour que le feedback s'affiche dans le conteneur principal
+
+    if state['submitted']:
+        st.success(st.session_state.feedback) if "Correct" in st.session_state.feedback else st.error(st.session_state.feedback)
+        
+        # Afficher le bouton Suivant/Terminer
+        if state['current_index'] < len(state['questions']) - 1:
+            if st.button("Question suivante >>"):
+                state['current_index'] += 1
+                state['submitted'] = False
+                st.session_state.feedback = ""
+                st.rerun()
+        else:
+            if st.button("Terminer le quiz"):
+                state['done'] = True
+                st.rerun()
+
+def show_schemas(conn):
+    st.header("Schémas de Base de Données 📊")
+
+    st.write("Sélectionnez un schéma pour le visualiser et le charger dans le **SQL Sandbox**.")
+    
+    # Sélecteur de BDD pour toute l'application
+    db_type = st.selectbox(
+        "Sélectionnez le Schéma Actif:",
+        list(SCHEMAS.keys()),
+        format_func=lambda x: SCHEMAS[x]["title"],
+        key="active_db_type",
+        help="Ceci définit la base de données utilisée pour le Testeur de Requêtes et les Exercices Pratiques."
+    )
+    
+    schema_data = SCHEMAS[db_type]
+    
+    if st.button(f"Charger/Réinitialiser le Schéma {schema_data['title']}"):
+        init_database(conn, db_type)
+        st.success(f"Le schéma **{schema_data['title']}** a été chargé dans la base de données en mémoire pour la pratique.")
+    
+    st.subheader(f"Diagramme Entité-Relation : {schema_data['title']}")
+    
+    try:
+        st.graphviz_chart(schema_data["erd"])
+    except Exception:
+        # Fallback si graphviz n'est pas bien installé ou supporté dans l'environnement
+        st.code(schema_data["erd"], language="mermaid")
+        st.warning("Diagramme ER affiché en code Graphviz (Graphviz non disponible pour un rendu graphique).")
+
+    st.subheader("Structure et Données")
+    
+    # Affichage des tables dans des onglets
+    tabs = st.tabs(list(schema_data["tables"].keys()))
+    
+    for i, table_name in enumerate(schema_data["tables"].keys()):
+        with tabs[i]:
+            st.markdown(f"#### Table `{table_name}`")
+            st.code(f"CREATE TABLE {table_name} ({schema_data['tables'][table_name]['ddl']});", language="sql")
+            
+            try:
+                df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+                st.dataframe(df, use_container_width=True)
+            except Exception as e:
+                st.error(f"Erreur lors de la récupération des données de la table {table_name}: {e}")
+                
+                
+
+def show_query_tester(conn, db_type):
+    st.header("Testeur de Requêtes SQL 💻")
+    st.info(f"Base de données active : **{SCHEMAS[db_type]['title']}**.")
+
+    col_schema, col_query = st.columns([1, 2.5])
+    
+    with col_schema:
+        st.subheader("Schéma Rapide")
+        # Afficher toutes les tables disponibles pour ce schéma
+        schema_data = SCHEMAS[db_type]
+        for table_name, data in schema_data["tables"].items():
+            with st.expander(f"Table `{table_name}`"):
+                st.code(f"CREATE TABLE {table_name} ({data['ddl']});", language="sql")
+                st.dataframe(pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT 3", conn), use_container_width=True)
+    
+    with col_query:
+        st.subheader("Éditeur de Requêtes")
+        
+        default_query = f"SELECT * FROM {list(SCHEMAS[db_type]['tables'].keys())[0]} LIMIT 10;"
+        
+        query = st.text_area(
+            "Entrez votre requête SQL (SELECT, INSERT, UPDATE, DELETE):", 
+            height=200, 
+            value=default_query,
+            key="query_tester_input"
+        )
+        
+        if st.button("🚀 Exécuter la Requête"):
+            try:
+                cursor = conn.cursor()
+                
+                # Exécuter la requête
+                cursor.execute(query)
+                
+                if query.strip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+                    conn.commit()
+                    st.success(f"Requête DML exécutée avec succès! {cursor.rowcount} ligne(s) affectée(s).")
+                else:
+                    results = cursor.fetchall()
+                    column_names = [description[0] for description in cursor.description]
+
+                    df = pd.DataFrame(results, columns=column_names)
+
+                    st.subheader("Résultats de la Requête")
+                    st.dataframe(df, use_container_width=True)
+                    st.info(f"Requête réussie! {len(df)} ligne(s) retournée(s).")
+
+            except Exception as e:
+                st.error(f"Erreur d'exécution de la requête : {e}")
+                
+        # Historique (simple)
+        if 'query_history' not in st.session_state:
+            st.session_state.query_history = []
+        
+        if query not in st.session_state.query_history and query != default_query:
+            st.session_state.query_history.insert(0, query)
+            st.session_state.query_history = st.session_state.query_history[:5] # Limiter à 5
+
+        with st.expander("Historique des 5 dernières requêtes"):
+            if st.session_state.query_history:
+                for i, hist_q in enumerate(st.session_state.query_history):
+                    if st.button(f"Charger Historique {i+1}", key=f"hist_btn_{i}"):
+                        st.session_state.query_tester_input = hist_q
+                        st.rerun()
+                    st.code(hist_q, language="sql")
+            else:
+                st.write("Aucune requête dans l'historique.")
+
+
+def show_exercises(conn, db_type):
+    st.header("Exercices Pratiques SQL 📝")
+
+    st.markdown(f"**Schéma actif pour la pratique :** **{SCHEMAS[db_type]['title']}**. Les exercices ci-dessous sont adaptés à ce schéma.")
+    
+    if db_type not in exercises:
+        st.warning(f"Aucun exercice spécifique n'est encore disponible pour le schéma **{SCHEMAS[db_type]['title']}**. Veuillez utiliser l'onglet 'Schémas' pour passer à HR ou Library.")
+        return
 
     # Sélection du niveau de difficulté
-    difficulty_options = []
-    for diff in ["Débutant", "Intermédiaire", "Avancé"]:
-        if st.session_state.exercise_progress[diff]["unlocked"]:
-            difficulty_options.append(diff)
-        else:
-            difficulty_options.append(f"{diff} (🔒)")
-
-    selected_difficulty = st.selectbox(
-        "Sélectionnez un niveau de difficulté:",
-        difficulty_options
+    difficulty = st.selectbox(
+        "Sélectionnez un niveau de difficulté:", list(exercises[db_type].keys())
     )
 
-    # Extraire le niveau réel (sans le "🔒")
-    real_difficulty = selected_difficulty.split(" ")[0]
-
-    # Exercices enrichis
-    enriched_exercises = {
-        "Débutant": [
-            {
-                "title": "Sélection simple",
-                "description": "Sélectionnez tous les employés dont le salaire est supérieur à 50000.",
-                "expected": "SELECT * FROM employees WHERE salary > 50000;",
-                "hint": "Utilisez `WHERE` pour filtrer les salaires.",
-                "expected_columns": "id, name, age, department, salary",
-                "solution_explanation": "Cette requête utilise `WHERE` pour ne sélectionner que les employés avec un salaire > 50000.",
-                "alternative_solutions": [
-                    "SELECT id, name, salary FROM employees WHERE salary > 50000;"
-                ]
-            },
-            {
-                "title": "Tri des résultats",
-                "description": "Affichez tous les employés, triés par salaire décroissant.",
-                "expected": "SELECT * FROM employees ORDER BY salary DESC;",
-                "hint": "Utilisez `ORDER BY` pour trier les résultats.",
-                "expected_columns": "id, name, age, department, salary",
-                "solution_explanation": "La clause `ORDER BY salary DESC` trie les employés du salaire le plus élevé au plus bas.",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Comptage d'enregistrements",
-                "description": "Comptez le nombre total d'employés dans la table `employees`.",
-                "expected": "SELECT COUNT(*) as total_employees FROM employees;",
-                "hint": "Utilisez la fonction `COUNT()`.",
-                "expected_columns": "total_employees",
-                "solution_explanation": "La fonction `COUNT(*)` compte toutes les lignes de la table.",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Création de table",
-                "description": "Créez une nouvelle table nommée `projects` avec les colonnes : `id` (clé primaire), `name` (texte), et `budget` (réel).",
-                "expected": "CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, budget REAL);",
-                "hint": "Utilisez `CREATE TABLE` pour définir la structure.",
-                "expected_columns": "",
-                "solution_explanation": "Cette requête crée une nouvelle table avec les colonnes spécifiées.",
-                "alternative_solutions": []
-            }
-        ],
-        "Intermédiaire": [
-            {
-                "title": "Jointure et filtrage",
-                "description": "Affichez le nom des employés et le budget de leur département, pour les départements avec un budget supérieur à 400000.",
-                "expected": """
-                SELECT e.name as employee_name, d.budget
-                FROM employees e
-                JOIN departments d ON e.department = d.name
-                WHERE d.budget > 400000;
-                """,
-                "hint": "Utilisez `JOIN` pour combiner les tables et `WHERE` pour filtrer.",
-                "expected_columns": "employee_name, budget",
-                "solution_explanation": "Cette requête joint les tables `employees` et `departments`, puis filtre les départements avec un budget > 400000.",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Agrégation avec condition",
-                "description": "Calculez le salaire moyen des employés par département, mais uniquement pour les départements avec plus de 1 employé.",
-                "expected": """
-                SELECT department, AVG(salary) as avg_salary
-                FROM employees
-                GROUP BY department
-                HAVING COUNT(*) > 1;
-                """,
-                "hint": "Utilisez `GROUP BY` et `HAVING` pour filtrer les groupes.",
-                "expected_columns": "department, avg_salary",
-                "solution_explanation": "La clause `HAVING` filtre les groupes après agrégation, ici les départements avec plus d'1 employé.",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Mise à jour de données",
-                "description": "Augmentez le salaire de tous les employés du département 'IT' de 10%.",
-                "expected": "UPDATE employees SET salary = salary * 1.10 WHERE department = 'IT';",
-                "hint": "Utilisez `UPDATE` pour modifier les données existantes.",
-                "expected_columns": "",
-                "solution_explanation": "Cette requête met à jour le salaire des employés du département 'IT' en les multipliant par 1.10 (augmentation de 10%).",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Suppression de données",
-                "description": "Supprimez tous les employés âgés de plus de 60 ans (s'il y en avait).",
-                "expected": "DELETE FROM employees WHERE age > 60;",
-                "hint": "Utilisez `DELETE` pour supprimer des lignes.",
-                "expected_columns": "",
-                "solution_explanation": "Cette requête supprime les employés dont l'âge est supérieur à 60 ans.",
-                "alternative_solutions": []
-            }
-        ],
-        "Avancé": [
-            {
-                "title": "Sous-requête corrélée",
-                "description": "Trouvez les employés dont le salaire est supérieur à la moyenne des salaires de leur département.",
-                "expected": """
-                SELECT e1.name, e1.salary, e1.department
-                FROM employees e1
-                WHERE e1.salary > (
-                    SELECT AVG(e2.salary)
-                    FROM employees e2
-                    WHERE e2.department = e1.department
-                );
-                """,
-                "hint": "Utilisez une sous-requête pour calculer la moyenne par département.",
-                "expected_columns": "name, salary, department",
-                "solution_explanation": "La sous-requête calcule la moyenne des salaires pour chaque département, puis la requête principale compare chaque salaire à cette moyenne.",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Fonctions de fenêtrage",
-                "description": "Affichez chaque employé avec son classement de salaire dans son département (du plus élevé au plus bas), ainsi que la différence entre son salaire et la moyenne de son département.",
-                "expected": """
-                SELECT
-                    name,
-                    department,
-                    salary,
-                    RANK() OVER (PARTITION BY department ORDER BY salary DESC) as salary_rank,
-                    salary - AVG(salary) OVER (PARTITION BY department) as salary_diff_from_avg
-                FROM employees;
-                """,
-                "hint": "Utilisez `RANK()` et `AVG()` avec `OVER(PARTITION BY)` pour créer des classements et des calculs par groupe.",
-                "expected_columns": "name, department, salary, salary_rank, salary_diff_from_avg",
-                "solution_explanation": "Cette requête utilise des fonctions de fenêtrage pour calculer le classement et la différence de salaire par rapport à la moyenne du département.",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Requête récursive (CTE)",
-                "description": "Écrivez une requête récursive pour afficher la hiérarchie des départements (en supposant que chaque département a un `manager_id` qui est un employé).",
-                "expected": """
-                WITH RECURSIVE department_hierarchy AS (
-                    -- Cas de base : départements sans manager (racine)
-                    SELECT d.id, d.name, d.manager_id, 0 as level
-                    FROM departments d
-                    WHERE d.manager_id IS NULL
-
-                    UNION ALL
-
-                    -- Cas récursif : départements avec manager
-                    SELECT d.id, d.name, d.manager_id, dh.level + 1
-                    FROM departments d
-                    JOIN department_hierarchy dh ON d.manager_id = dh.id
-                )
-                SELECT name as department_name, level
-                FROM department_hierarchy
-                ORDER BY level, name;
-                """,
-                "hint": "Utilisez une CTE récursive (`WITH RECURSIVE`) pour parcourir la hiérarchie.",
-                "expected_columns": "department_name, level",
-                "solution_explanation": "Cette requête récursive parcourt la hiérarchie des départements en partant des départements sans manager (niveau 0) et en ajoutant les départements dont le manager est déjà dans la hiérarchie.",
-                "alternative_solutions": []
-            },
-            {
-                "title": "Création de vue",
-                "description": "Créez une vue nommée `employee_department_view` qui affiche le nom de l'employé, son département, et le budget du département.",
-                "expected": """
-                CREATE VIEW employee_department_view AS
-                SELECT e.name as employee_name, d.name as department_name, d.budget
-                FROM employees e
-                JOIN departments d ON e.department = d.name;
-                """,
-                "hint": "Utilisez `CREATE VIEW` pour définir une vue.",
-                "expected_columns": "",
-                "solution_explanation": "Cette requête crée une vue qui combine les informations des tables `employees` et `departments`.",
-                "alternative_solutions": []
-            }
-        ]
-    }
-
     # Sélection de l'exercice
-    selected_exercises = enriched_exercises[real_difficulty]
+    selected_exercises = exercises[db_type][difficulty]
     exercise_titles = [ex["title"] for ex in selected_exercises]
     selected_exercise_title = st.selectbox("Sélectionnez un exercice:", exercise_titles)
 
     # Trouver l'exercice sélectionné
     exercise = next(
-        (ex for ex in selected_exercises if ex["title"] == selected_exercise_title),
-        None,
+        (ex for ex in selected_exercises if ex["title"] == selected_exercise_title), None
     )
 
     if exercise:
-        st.subheader(exercise["title"])
-        st.write(exercise["description"])
+        with st.container(border=True):
+            st.subheader(f"{exercise['title']} ({difficulty})")
+            st.markdown(f"**Objectif :** {exercise['desc']}")
 
-        # Afficher les colonnes attendues
-        if exercise["expected_columns"]:
-            st.info(f"📌 Colonnes attendues: **{exercise['expected_columns']}**")
-
-        # Afficher les schémas des tables côte à côte
-        st.subheader("🗺️ Schémas des tables :")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Table `employees`**")
-            st.code(
-                """
-                CREATE TABLE employees (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    age INTEGER,
-                    department TEXT,
-                    salary REAL
-                );
-                """
-            )
-            # Afficher les données d'exemple
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM employees")
-            results = cursor.fetchall()
-            column_names = [description[0] for description in cursor.description]
-            df_employees = pd.DataFrame(results, columns=column_names)
-            st.dataframe(df_employees)
-
-        with col2:
-            st.markdown("**Table `departments`**")
-            st.code(
-                """
-                CREATE TABLE departments (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    manager_id INTEGER,
-                    budget REAL,
-                    FOREIGN KEY (manager_id) REFERENCES employees (id)
-                );
-                """
-            )
-            # Afficher les données d'exemple
-            cursor.execute("SELECT * FROM departments")
-            results = cursor.fetchall()
-            column_names = [description[0] for description in cursor.description]
-            df_departments = pd.DataFrame(results, columns=column_names)
-            st.dataframe(df_departments)
+            # Affichage rapide du schéma
+            with st.expander("Voir les tables et les données pour l'aide"):
+                schema_data = SCHEMAS[db_type]
+                for table_name, data in schema_data["tables"].items():
+                    st.caption(f"Table `{table_name}`")
+                    st.code(f"({data['ddl']})", language="sql")
+                    st.dataframe(pd.read_sql_query(f"SELECT * FROM {table_name}", conn).head(5), use_container_width=True)
 
         # Zone de saisie pour la solution
-        user_solution = st.text_area("Votre solution SQL:", height=150)
+        user_solution = st.text_area(f"Votre solution SQL pour '{exercise['title']}' :", height=120, key="exercise_solution_input")
 
-        # Vérification de la solution
-        if st.button("Vérifier la solution"):
+        col_check, col_hint, col_sol = st.columns(3)
+        
+        solution_check_button = col_check.button("✅ Vérifier la Solution")
+
+        if solution_check_button:
             if user_solution.strip():
-                try:
-                    # Exécuter la requête de l'utilisateur
-                    cursor = conn.cursor()
-                    cursor.execute(user_solution)
+                # Utiliser la fonction de comparaison améliorée
+                is_correct, user_df, message = compare_query_results(
+                    user_solution, exercise["expected"], conn
+                )
 
-                    # Pour les requêtes qui ne retournent pas de résultats (UPDATE, DELETE, CREATE)
-                    if not exercise["expected_columns"]:
-                        st.success("✅ Votre requête a été exécutée avec succès !")
-                        st.session_state.exercise_progress[real_difficulty]["completed"].add(exercise["title"])
-                        st.rerun()
-                    else:
-                        user_results = cursor.fetchall()
-                        user_column_names = [description[0] for description in cursor.description]
+                if is_correct:
+                    st.success("Félicitations! Votre solution est **correcte**! 🎉")
+                    st.balloons()
+                else:
+                    st.error(f"Solution Incorrecte. **{message}**")
+                
+                # Afficher le résultat de l'utilisateur pour comparaison
+                if user_df is not None:
+                    st.subheader("Votre Résultat:")
+                    st.dataframe(user_df, use_container_width=True)
 
-                        # Exécuter la requête attendue
-                        cursor.execute(exercise["expected"])
-                        expected_results = cursor.fetchall()
-                        expected_column_names = [description[0] for description in cursor.description]
-
-                        # Afficher les résultats de l'utilisateur
-                        st.subheader("📊 Votre résultat:")
-                        user_df = pd.DataFrame(user_results, columns=user_column_names)
-                        st.dataframe(user_df)
-
-                        # Visualisation si applicable
-                        if "salary" in user_df.columns:
-                            st.subheader("📈 Visualisation")
-                            fig = px.bar(user_df, x="name", y="salary", title="Salaire par employé")
-                            st.plotly_chart(fig)
-
-                        # Vérifier si les résultats correspondent
-                        results_match = (
-                            user_results == expected_results
-                            and user_column_names == expected_column_names
-                        )
-
-                        if results_match:
-                            st.success("🎉 **Félicitations!** Votre solution est correcte!")
-                            st.session_state.exercise_progress[real_difficulty]["completed"].add(exercise["title"])
-                            st.info(f"💡 **Explication**: {exercise['solution_explanation']}")
-                            if exercise["alternative_solutions"]:
-                                st.markdown("**Solutions alternatives:**")
-                                for alt in exercise["alternative_solutions"]:
-                                    st.code(alt)
-                        else:
-                            st.warning("⚠️ Votre solution ne correspond pas exactement au résultat attendu. Continuez d'essayer!")
-
-                        # Afficher un indice
-                        if st.button("💡 Afficher un indice"):
-                            st.info(f"**Indice**: {exercise['hint']}")
-
-                        # Option pour voir la solution
-                        if st.button("🔍 Voir la solution"):
-                            st.code(exercise["expected"])
-                            st.info(f"💡 **Explication**: {exercise['solution_explanation']}")
-
-                except Exception as e:
-                    st.error(f"❌ Erreur d'exécution de la requête: {e}")
             else:
-                st.warning("⚠️ Veuillez saisir une solution avant de vérifier.")
+                st.warning("Veuillez saisir une solution avant de vérifier.")
+        
+        # Boutons d'aide
+        if col_hint.button("💡 Indice (Requis!)"):
+            # L'indice est souvent dans l'expected query elle-même, on peut l'analyser
+            parts = exercise['expected'].split()
+            hint = f"Pensez aux clauses: `{parts[0]}`, `{parts[1]}`."
+            if 'JOIN' in exercise['expected']: hint += " N'oubliez pas la `JOIN`."
+            if 'GROUP BY' in exercise['expected']: hint += " Avez-vous besoin de `GROUP BY` et d'une fonction d'agrégation ?"
+            if 'WHERE' in exercise['expected']: hint += " Utilisez la clause `WHERE` pour filtrer les lignes."
+            st.info(hint)
 
-    # Afficher les progrès
-    st.sidebar.subheader("📊 Vos progrès")
-    for diff in ["Débutant", "Intermédiaire", "Avancé"]:
-        completed = len(st.session_state.exercise_progress[diff]["completed"])
-        total = len(enriched_exercises[diff])
-        st.sidebar.markdown(f"**{diff}**: {completed}/{total} exercices réussis")
-        if not st.session_state.exercise_progress[diff]["unlocked"]:
-            st.sidebar.markdown("*(À déverrouiller)*")
+        if col_sol.button("👁️ Voir la Solution"):
+            st.code(exercise["expected"], language="sql")
 
 
-# Fonction pour afficher les tutoriels
-def show_tutorials():
-    st.header("Tutoriels SQL 📚")
-    st.write(
-        """
-        Apprenez les concepts SQL pas à pas avec ces tutoriels interactifs.
-        """
-    )
+# --- 6. Fonction Principale et Routage ---
 
-    # Sélection du tutoriel
-    tutorial_topics = [
-        "Introduction à SQL",
-        "Les commandes SELECT et WHERE",
-        "Les jointures (JOIN)",
-        "Les fonctions d'agrégation (GROUP BY, HAVING)",
-        "Les sous-requêtes",
-        "Les fonctions de fenêtrage"
-    ]
-    selected_topic = st.selectbox("Sélectionnez un tutoriel:", tutorial_topics)
-
-    if selected_topic == "Introduction à SQL":
-        st.subheader("Introduction à SQL")
-        st.write(
-            """
-            SQL (Structured Query Language) est un langage standard pour la gestion des bases de données relationnelles.
-            Il permet de créer, modifier et interroger des bases de données.
-
-            ### Concepts clés:
-            - **Tables**: Les données sont stockées dans des tables composées de lignes et de colonnes.
-            - **Requêtes**: Les commandes SQL permettent d'interroger et de manipuler les données.
-            - **Clés primaires et étrangères**: Elles permettent de lier les tables entre elles.
-            """
-        )
-
-    elif selected_topic == "Les commandes SELECT et WHERE":
-        st.subheader("Les commandes SELECT et WHERE")
-        st.write(
-            """
-            La commande `SELECT` est utilisée pour récupérer des données d'une table.
-            La clause `WHERE` permet de filtrer les résultats en fonction d'une condition.
-
-            ### Exemple:
-            ```sql
-            SELECT name, salary FROM employees WHERE department = 'IT';
-            ```
-            Cette requête sélectionne le nom et le salaire des employés du département IT.
-            """
-        )
-
-    elif selected_topic == "Les jointures (JOIN)":
-        st.subheader("Les jointures (JOIN)")
-        st.write(
-            """
-            Les jointures permettent de combiner les données de deux ou plusieurs tables.
-            Il existe plusieurs types de jointures: `INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`, etc.
-
-            ### Exemple:
-            ```sql
-            SELECT e.name, d.name as department_name
-            FROM employees e
-            JOIN departments d ON e.department = d.name;
-            ```
-            Cette requête affiche le nom des employés avec le nom de leur département.
-            """
-        )
-
-    elif selected_topic == "Les fonctions d'agrégation (GROUP BY, HAVING)":
-        st.subheader("Les fonctions d'agrégation (GROUP BY, HAVING)")
-        st.write(
-            """
-            Les fonctions d'agrégation (`COUNT`, `SUM`, `AVG`, etc.) permettent de calculer des statistiques sur les données.
-            La clause `GROUP BY` permet de regrouper les résultats par une ou plusieurs colonnes.
-            La clause `HAVING` permet de filtrer les résultats après agrégation.
-
-            ### Exemple:
-            ```sql
-            SELECT department, AVG(salary) as avg_salary
-            FROM employees
-            GROUP BY department
-            HAVING AVG(salary) > 50000;
-            ```
-            Cette requête calcule le salaire moyen par département et filtre les départements où le salaire moyen est supérieur à 50000.
-            """
-        )
-
-    elif selected_topic == "Les sous-requêtes":
-        st.subheader("Les sous-requêtes")
-        st.write(
-            """
-            Une sous-requête est une requête imbriquée dans une autre requête.
-            Elle permet d'effectuer des calculs intermédiaires ou de filtrer des données en fonction de résultats de requêtes.
-
-            ### Exemple:
-            ```sql
-            SELECT name, salary
-            FROM employees
-            WHERE salary > (SELECT AVG(salary) FROM employees);
-            ```
-            Cette requête sélectionne les employés dont le salaire est supérieur à la moyenne des salaires.
-            """
-        )
-
-    elif selected_topic == "Les fonctions de fenêtrage":
-        st.subheader("Les fonctions de fenêtrage")
-        st.write(
-            """
-            Les fonctions de fenêtrage (`RANK`, `ROW_NUMBER`, `DENSE_RANK`, etc.) permettent d'effectuer des calculs sur des ensembles de lignes liés à la ligne courante.
-            Elles sont utiles pour créer des classements ou des calculs cumulatifs.
-
-            ### Exemple:
-            ```sql
-            SELECT name, department, salary,
-                   RANK() OVER (PARTITION BY department ORDER BY salary DESC) as salary_rank
-            FROM employees;
-            ```
-            Cette requête affiche chaque employé avec son classement de salaire dans son département.
-            """
-        )
-
-# Fonction principale
 def main():
-    st.title("Application de Révision SQL")
+    # Initialisation de l'état de la BDD si non présent
+    if "active_db_type" not in st.session_state:
+        st.session_state["active_db_type"] = "HR"
+        
+    # La connexion à la BDD est stockée en cache et réutilisée
+    conn = create_connection()
+
+    if conn is None:
+        st.stop() # Arrêter si la connexion échoue
+
+    # Initialisation de la BDD avec le schéma actif
+    init_database(conn, st.session_state["active_db_type"])
 
     # Barre latérale pour la navigation
-    menu = st.sidebar.selectbox(
-        "Navigation",
+    st.sidebar.title("Navigation 🧭")
+    menu = st.sidebar.radio(
+        "Choisissez une section:",
         [
             "Accueil",
-            "Quiz SQL",
-            "Testeur de Requêtes",
             "Schémas de Base de Données",
+            "Testeur de Requêtes",
             "Exercices Pratiques",
-            "Tutoriels SQL"
+            "Quiz SQL",
         ],
     )
 
-    # Connexion à la base de données
-    conn = create_connection()
+    # Affichage des sections
+    if menu == "Accueil":
+        show_home()
+    elif menu == "Quiz SQL":
+        show_quiz()
+    elif menu == "Testeur de Requêtes":
+        show_query_tester(conn, st.session_state["active_db_type"])
+    elif menu == "Schémas de Base de Données":
+        show_schemas(conn)
+    elif menu == "Exercices Pratiques":
+        show_exercises(conn, st.session_state["active_db_type"])
 
-    if conn is not None:
-        init_database(conn)
-
-        if menu == "Accueil":
-            show_home()
-        elif menu == "Quiz SQL":
-            show_quiz()
-        elif menu == "Testeur de Requêtes":
-            show_query_tester(conn)
-        elif menu == "Schémas de Base de Données":
-            show_schemas(conn)
-        elif menu == "Exercices Pratiques":
-            show_exercises(conn)
-        elif menu == "Tutoriels SQL":
-            show_tutorials()
-
-        conn.close()
-    else:
-        st.error("Erreur lors de la connexion à la base de données.")
 
 if __name__ == "__main__":
     main()
