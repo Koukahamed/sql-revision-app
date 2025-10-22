@@ -470,17 +470,221 @@ def show_exercises(conn):
     st.write(
         """
         Pratiquez vos compétences SQL en résolvant des exercices de difficulté variée.
-        Chaque exercice comprend une description du problème et une zone pour écrire votre solution.
+        **Nouveautés** :
+        - Exercices de création/modification de tables.
+        - Exercices de mise à jour et suppression.
+        - Suivi de vos progrès.
+        - Solutions alternatives et astuces avancées.
         """
     )
 
+    # Initialisation du suivi des progrès
+    if "exercise_progress" not in st.session_state:
+        st.session_state.exercise_progress = {
+            "Débutant": {"completed": set(), "unlocked": True},
+            "Intermédiaire": {"completed": set(), "unlocked": False},
+            "Avancé": {"completed": set(), "unlocked": False}
+        }
+
+    # Vérifier si un niveau est déverrouillé
+    def is_unlocked(difficulty):
+        if difficulty == "Débutant":
+            return True
+        elif difficulty == "Intermédiaire":
+            return len(st.session_state.exercise_progress["Débutant"]["completed"]) >= 2
+        elif difficulty == "Avancé":
+            return len(st.session_state.exercise_progress["Intermédiaire"]["completed"]) >= 2
+
+    # Mettre à jour l'état de déverrouillage
+    for difficulty in ["Intermédiaire", "Avancé"]:
+        st.session_state.exercise_progress[difficulty]["unlocked"] = is_unlocked(difficulty)
+
     # Sélection du niveau de difficulté
-    difficulty = st.selectbox(
-        "Sélectionnez un niveau de difficulté:", ["Débutant", "Intermédiaire", "Avancé"]
+    difficulty_options = []
+    for diff in ["Débutant", "Intermédiaire", "Avancé"]:
+        if st.session_state.exercise_progress[diff]["unlocked"]:
+            difficulty_options.append(diff)
+        else:
+            difficulty_options.append(f"{diff} (🔒)")
+
+    selected_difficulty = st.selectbox(
+        "Sélectionnez un niveau de difficulté:",
+        difficulty_options
     )
 
+    # Extraire le niveau réel (sans le "🔒")
+    real_difficulty = selected_difficulty.split(" ")[0]
+
+    # Exercices enrichis
+    enriched_exercises = {
+        "Débutant": [
+            {
+                "title": "Sélection simple",
+                "description": "Sélectionnez tous les employés dont le salaire est supérieur à 50000.",
+                "expected": "SELECT * FROM employees WHERE salary > 50000;",
+                "hint": "Utilisez `WHERE` pour filtrer les salaires.",
+                "expected_columns": "id, name, age, department, salary",
+                "solution_explanation": "Cette requête utilise `WHERE` pour ne sélectionner que les employés avec un salaire > 50000.",
+                "alternative_solutions": [
+                    "SELECT id, name, salary FROM employees WHERE salary > 50000;"
+                ]
+            },
+            {
+                "title": "Tri des résultats",
+                "description": "Affichez tous les employés, triés par salaire décroissant.",
+                "expected": "SELECT * FROM employees ORDER BY salary DESC;",
+                "hint": "Utilisez `ORDER BY` pour trier les résultats.",
+                "expected_columns": "id, name, age, department, salary",
+                "solution_explanation": "La clause `ORDER BY salary DESC` trie les employés du salaire le plus élevé au plus bas.",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Comptage d'enregistrements",
+                "description": "Comptez le nombre total d'employés dans la table `employees`.",
+                "expected": "SELECT COUNT(*) as total_employees FROM employees;",
+                "hint": "Utilisez la fonction `COUNT()`.",
+                "expected_columns": "total_employees",
+                "solution_explanation": "La fonction `COUNT(*)` compte toutes les lignes de la table.",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Création de table",
+                "description": "Créez une nouvelle table nommée `projects` avec les colonnes : `id` (clé primaire), `name` (texte), et `budget` (réel).",
+                "expected": "CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, budget REAL);",
+                "hint": "Utilisez `CREATE TABLE` pour définir la structure.",
+                "expected_columns": "",
+                "solution_explanation": "Cette requête crée une nouvelle table avec les colonnes spécifiées.",
+                "alternative_solutions": []
+            }
+        ],
+        "Intermédiaire": [
+            {
+                "title": "Jointure et filtrage",
+                "description": "Affichez le nom des employés et le budget de leur département, pour les départements avec un budget supérieur à 400000.",
+                "expected": """
+                SELECT e.name as employee_name, d.budget
+                FROM employees e
+                JOIN departments d ON e.department = d.name
+                WHERE d.budget > 400000;
+                """,
+                "hint": "Utilisez `JOIN` pour combiner les tables et `WHERE` pour filtrer.",
+                "expected_columns": "employee_name, budget",
+                "solution_explanation": "Cette requête joint les tables `employees` et `departments`, puis filtre les départements avec un budget > 400000.",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Agrégation avec condition",
+                "description": "Calculez le salaire moyen des employés par département, mais uniquement pour les départements avec plus de 1 employé.",
+                "expected": """
+                SELECT department, AVG(salary) as avg_salary
+                FROM employees
+                GROUP BY department
+                HAVING COUNT(*) > 1;
+                """,
+                "hint": "Utilisez `GROUP BY` et `HAVING` pour filtrer les groupes.",
+                "expected_columns": "department, avg_salary",
+                "solution_explanation": "La clause `HAVING` filtre les groupes après agrégation, ici les départements avec plus d'1 employé.",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Mise à jour de données",
+                "description": "Augmentez le salaire de tous les employés du département 'IT' de 10%.",
+                "expected": "UPDATE employees SET salary = salary * 1.10 WHERE department = 'IT';",
+                "hint": "Utilisez `UPDATE` pour modifier les données existantes.",
+                "expected_columns": "",
+                "solution_explanation": "Cette requête met à jour le salaire des employés du département 'IT' en les multipliant par 1.10 (augmentation de 10%).",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Suppression de données",
+                "description": "Supprimez tous les employés âgés de plus de 60 ans (s'il y en avait).",
+                "expected": "DELETE FROM employees WHERE age > 60;",
+                "hint": "Utilisez `DELETE` pour supprimer des lignes.",
+                "expected_columns": "",
+                "solution_explanation": "Cette requête supprime les employés dont l'âge est supérieur à 60 ans.",
+                "alternative_solutions": []
+            }
+        ],
+        "Avancé": [
+            {
+                "title": "Sous-requête corrélée",
+                "description": "Trouvez les employés dont le salaire est supérieur à la moyenne des salaires de leur département.",
+                "expected": """
+                SELECT e1.name, e1.salary, e1.department
+                FROM employees e1
+                WHERE e1.salary > (
+                    SELECT AVG(e2.salary)
+                    FROM employees e2
+                    WHERE e2.department = e1.department
+                );
+                """,
+                "hint": "Utilisez une sous-requête pour calculer la moyenne par département.",
+                "expected_columns": "name, salary, department",
+                "solution_explanation": "La sous-requête calcule la moyenne des salaires pour chaque département, puis la requête principale compare chaque salaire à cette moyenne.",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Fonctions de fenêtrage",
+                "description": "Affichez chaque employé avec son classement de salaire dans son département (du plus élevé au plus bas), ainsi que la différence entre son salaire et la moyenne de son département.",
+                "expected": """
+                SELECT
+                    name,
+                    department,
+                    salary,
+                    RANK() OVER (PARTITION BY department ORDER BY salary DESC) as salary_rank,
+                    salary - AVG(salary) OVER (PARTITION BY department) as salary_diff_from_avg
+                FROM employees;
+                """,
+                "hint": "Utilisez `RANK()` et `AVG()` avec `OVER(PARTITION BY)` pour créer des classements et des calculs par groupe.",
+                "expected_columns": "name, department, salary, salary_rank, salary_diff_from_avg",
+                "solution_explanation": "Cette requête utilise des fonctions de fenêtrage pour calculer le classement et la différence de salaire par rapport à la moyenne du département.",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Requête récursive (CTE)",
+                "description": "Écrivez une requête récursive pour afficher la hiérarchie des départements (en supposant que chaque département a un `manager_id` qui est un employé).",
+                "expected": """
+                WITH RECURSIVE department_hierarchy AS (
+                    -- Cas de base : départements sans manager (racine)
+                    SELECT d.id, d.name, d.manager_id, 0 as level
+                    FROM departments d
+                    WHERE d.manager_id IS NULL
+
+                    UNION ALL
+
+                    -- Cas récursif : départements avec manager
+                    SELECT d.id, d.name, d.manager_id, dh.level + 1
+                    FROM departments d
+                    JOIN department_hierarchy dh ON d.manager_id = dh.id
+                )
+                SELECT name as department_name, level
+                FROM department_hierarchy
+                ORDER BY level, name;
+                """,
+                "hint": "Utilisez une CTE récursive (`WITH RECURSIVE`) pour parcourir la hiérarchie.",
+                "expected_columns": "department_name, level",
+                "solution_explanation": "Cette requête récursive parcourt la hiérarchie des départements en partant des départements sans manager (niveau 0) et en ajoutant les départements dont le manager est déjà dans la hiérarchie.",
+                "alternative_solutions": []
+            },
+            {
+                "title": "Création de vue",
+                "description": "Créez une vue nommée `employee_department_view` qui affiche le nom de l'employé, son département, et le budget du département.",
+                "expected": """
+                CREATE VIEW employee_department_view AS
+                SELECT e.name as employee_name, d.name as department_name, d.budget
+                FROM employees e
+                JOIN departments d ON e.department = d.name;
+                """,
+                "hint": "Utilisez `CREATE VIEW` pour définir une vue.",
+                "expected_columns": "",
+                "solution_explanation": "Cette requête crée une vue qui combine les informations des tables `employees` et `departments`.",
+                "alternative_solutions": []
+            }
+        ]
+    }
+
     # Sélection de l'exercice
-    selected_exercises = exercises[difficulty]
+    selected_exercises = enriched_exercises[real_difficulty]
     exercise_titles = [ex["title"] for ex in selected_exercises]
     selected_exercise_title = st.selectbox("Sélectionnez un exercice:", exercise_titles)
 
@@ -495,7 +699,8 @@ def show_exercises(conn):
         st.write(exercise["description"])
 
         # Afficher les colonnes attendues
-        st.info(f"📌 Colonnes attendues dans le résultat: **{exercise['expected_columns']}**")
+        if exercise["expected_columns"]:
+            st.info(f"📌 Colonnes attendues: **{exercise['expected_columns']}**")
 
         # Afficher les schémas des tables côte à côte
         st.subheader("🗺️ Schémas des tables :")
@@ -513,6 +718,14 @@ def show_exercises(conn):
                 );
                 """
             )
+            # Afficher les données d'exemple
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM employees")
+            results = cursor.fetchall()
+            column_names = [description[0] for description in cursor.description]
+            df_employees = pd.DataFrame(results, columns=column_names)
+            st.dataframe(df_employees)
+
         with col2:
             st.markdown("**Table `departments`**")
             st.code(
@@ -526,9 +739,15 @@ def show_exercises(conn):
                 );
                 """
             )
+            # Afficher les données d'exemple
+            cursor.execute("SELECT * FROM departments")
+            results = cursor.fetchall()
+            column_names = [description[0] for description in cursor.description]
+            df_departments = pd.DataFrame(results, columns=column_names)
+            st.dataframe(df_departments)
 
         # Zone de saisie pour la solution
-        user_solution = st.text_area("Votre solution SQL:", height=100)
+        user_solution = st.text_area("Votre solution SQL:", height=150)
 
         # Vérification de la solution
         if st.button("Vérifier la solution"):
@@ -537,44 +756,72 @@ def show_exercises(conn):
                     # Exécuter la requête de l'utilisateur
                     cursor = conn.cursor()
                     cursor.execute(user_solution)
-                    user_results = cursor.fetchall()
-                    user_column_names = [description[0] for description in cursor.description]
 
-                    # Exécuter la requête attendue
-                    cursor.execute(exercise["expected"])
-                    expected_results = cursor.fetchall()
-                    expected_column_names = [description[0] for description in cursor.description]
-
-                    # Afficher les résultats de l'utilisateur
-                    st.subheader("📊 Votre résultat:")
-                    user_df = pd.DataFrame(user_results, columns=user_column_names)
-                    st.dataframe(user_df)
-
-                    # Vérifier si les résultats correspondent
-                    results_match = (
-                        user_results == expected_results
-                        and user_column_names == expected_column_names
-                    )
-
-                    if results_match:
-                        st.success("🎉 **Félicitations!** Votre solution est correcte!")
+                    # Pour les requêtes qui ne retournent pas de résultats (UPDATE, DELETE, CREATE)
+                    if not exercise["expected_columns"]:
+                        st.success("✅ Votre requête a été exécutée avec succès !")
+                        st.session_state.exercise_progress[real_difficulty]["completed"].add(exercise["title"])
+                        st.rerun()
                     else:
-                        st.warning(
-                            "⚠️ Votre solution ne correspond pas exactement au résultat attendu. Continuez d'essayer!"
+                        user_results = cursor.fetchall()
+                        user_column_names = [description[0] for description in cursor.description]
+
+                        # Exécuter la requête attendue
+                        cursor.execute(exercise["expected"])
+                        expected_results = cursor.fetchall()
+                        expected_column_names = [description[0] for description in cursor.description]
+
+                        # Afficher les résultats de l'utilisateur
+                        st.subheader("📊 Votre résultat:")
+                        user_df = pd.DataFrame(user_results, columns=user_column_names)
+                        st.dataframe(user_df)
+
+                        # Visualisation si applicable
+                        if "salary" in user_df.columns:
+                            st.subheader("📈 Visualisation")
+                            fig = px.bar(user_df, x="name", y="salary", title="Salaire par employé")
+                            st.plotly_chart(fig)
+
+                        # Vérifier si les résultats correspondent
+                        results_match = (
+                            user_results == expected_results
+                            and user_column_names == expected_column_names
                         )
 
-                    # Afficher un indice
-                    if st.button("💡 Afficher un indice"):
-                        st.info(f"**Indice**: {exercise['hint']}")
+                        if results_match:
+                            st.success("🎉 **Félicitations!** Votre solution est correcte!")
+                            st.session_state.exercise_progress[real_difficulty]["completed"].add(exercise["title"])
+                            st.info(f"💡 **Explication**: {exercise['solution_explanation']}")
+                            if exercise["alternative_solutions"]:
+                                st.markdown("**Solutions alternatives:**")
+                                for alt in exercise["alternative_solutions"]:
+                                    st.code(alt)
+                        else:
+                            st.warning("⚠️ Votre solution ne correspond pas exactement au résultat attendu. Continuez d'essayer!")
 
-                    # Option pour voir la solution
-                    if st.button("🔍 Voir la solution"):
-                        st.code(exercise["expected"])
+                        # Afficher un indice
+                        if st.button("💡 Afficher un indice"):
+                            st.info(f"**Indice**: {exercise['hint']}")
+
+                        # Option pour voir la solution
+                        if st.button("🔍 Voir la solution"):
+                            st.code(exercise["expected"])
+                            st.info(f"💡 **Explication**: {exercise['solution_explanation']}")
 
                 except Exception as e:
                     st.error(f"❌ Erreur d'exécution de la requête: {e}")
             else:
                 st.warning("⚠️ Veuillez saisir une solution avant de vérifier.")
+
+    # Afficher les progrès
+    st.sidebar.subheader("📊 Vos progrès")
+    for diff in ["Débutant", "Intermédiaire", "Avancé"]:
+        completed = len(st.session_state.exercise_progress[diff]["completed"])
+        total = len(enriched_exercises[diff])
+        st.sidebar.markdown(f"**{diff}**: {completed}/{total} exercices réussis")
+        if not st.session_state.exercise_progress[diff]["unlocked"]:
+            st.sidebar.markdown("*(À déverrouiller)*")
+
 
 # Fonction pour afficher les tutoriels
 def show_tutorials():
