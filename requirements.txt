@@ -4,3 +4,4 @@ duckdb
 plotly
 black
 isort
+matplotlib
