@@ -461,12 +461,11 @@ def show_schemas(conn):
 
 def show_exercises(conn):
     st.header("Exercices Pratiques SQL")
-
     st.write(
         """
-    Pratiquez vos compétences SQL en résolvant des exercices de difficulté variée.
-    Chaque exercice comprend une description du problème et une zone pour écrire votre solution.
-    """
+        Pratiquez vos compétences SQL en résolvant des exercices de difficulté variée.
+        Chaque exercice comprend une description du problème et une zone pour écrire votre solution.
+        """
     )
 
     # Sélection du niveau de difficulté
@@ -544,28 +543,34 @@ def show_exercises(conn):
         # Afficher les colonnes attendues
         st.info(f"Colonnes attendues dans le résultat: {exercise['expected_columns']}")
 
-        # Afficher le schéma pour référence
-        with st.expander("Voir le schéma de la base de données"):
+        # Afficher les schémas des tables côte à côte
+        st.subheader("Schémas des tables :")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Table `employees`**")
             st.code(
                 """
-            -- Table 'employees'
-            CREATE TABLE employees (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                age INTEGER,
-                department TEXT,
-                salary REAL
-            );
-
-            -- Table 'departments'
-            CREATE TABLE departments (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                manager_id INTEGER,
-                budget REAL,
-                FOREIGN KEY (manager_id) REFERENCES employees (id)
-            );
-            """
+                CREATE TABLE employees (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    age INTEGER,
+                    department TEXT,
+                    salary REAL
+                );
+                """
+            )
+        with col2:
+            st.markdown("**Table `departments`**")
+            st.code(
+                """
+                CREATE TABLE departments (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    manager_id INTEGER,
+                    budget REAL,
+                    FOREIGN KEY (manager_id) REFERENCES employees (id)
+                );
+                """
             )
 
         # Zone de saisie pour la solution
@@ -608,19 +613,18 @@ def show_exercises(conn):
                             "Votre solution ne correspond pas exactement au résultat attendu. Continuez d'essayer!"
                         )
 
-                        # Afficher un indice
-                        if st.button("Afficher un indice"):
-                            st.info(f"Indice: {exercise['hint']}")
+                    # Afficher un indice
+                    if st.button("Afficher un indice"):
+                        st.info(f"Indice: {exercise['hint']}")
 
-                        # Option pour voir la solution
-                        if st.button("Voir la solution"):
-                            st.code(exercise["expected"])
+                    # Option pour voir la solution
+                    if st.button("Voir la solution"):
+                        st.code(exercise["expected"])
 
                 except Exception as e:
                     st.error(f"Erreur d'exécution de la requête: {e}")
             else:
                 st.warning("Veuillez saisir une solution avant de vérifier.")
-
 
 if __name__ == "__main__":
     main()
