@@ -171,9 +171,14 @@ exercises = {
 
 @st.cache_resource
 def create_connection():
-    """Crée une connexion persistante à une base de données SQLite en mémoire."""
+    """
+    Crée une connexion persistante à une base de données SQLite en mémoire.
+    AJOUT: check_same_thread=False pour résoudre les problèmes de multi-threading de Streamlit.
+    """
     try:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        # Activer les clés étrangères pour SQLite
+        conn.execute("PRAGMA foreign_keys = ON;") 
         return conn
     except Error as e:
         st.error(f"Erreur de connexion SQLite: {e}")
@@ -193,9 +198,10 @@ def init_database(conn, db_type):
         # Création de la table
         cursor.execute(f"CREATE TABLE {table_name} ({data['ddl']});")
         
-        # Insertion des données via Pandas pour la simplicité et la robustesse
-        df = pd.DataFrame(data["data"], columns=data["columns"])
-        df.to_sql(table_name, conn, if_exists='replace', index=False)
+        # Insertion des données (plus robuste)
+        placeholders = ', '.join(['?'] * len(data['columns']))
+        insert_query = f"INSERT INTO {table_name} ({', '.join(data['columns'])}) VALUES ({placeholders});"
+        cursor.executemany(insert_query, data['data'])
         
     conn.commit()
 
@@ -411,8 +417,14 @@ def show_query_tester(conn, db_type):
         schema_data = SCHEMAS[db_type]
         for table_name, data in schema_data["tables"].items():
             with st.expander(f"Table `{table_name}`"):
-                st.code(f"CREATE TABLE {table_name} ({data['ddl']});", language="sql")
-                st.dataframe(pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT 3", conn), use_container_width=True)
+                st.caption("Premières lignes:")
+                st.code(f"({data['ddl']})", language="sql")
+                # Utiliser conn.cursor().execute() plutôt que read_sql_query pour la robustesse après des DML
+                cursor = conn.cursor()
+                cursor.execute(f"SELECT * FROM {table_name} LIMIT 3")
+                cols = [desc[0] for desc in cursor.description]
+                df_sample = pd.DataFrame(cursor.fetchall(), columns=cols)
+                st.dataframe(df_sample, use_container_width=True)
     
     with col_query:
         st.subheader("Éditeur de Requêtes")
@@ -435,7 +447,7 @@ def show_query_tester(conn, db_type):
                 
                 if query.strip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
                     conn.commit()
-                    st.success(f"Requête DML exécutée avec succès! {cursor.rowcount} ligne(s) affectée(s).")
+                    st.success(f"Requête DML exécutée avec succès! {cursor.rowcount} ligne(s) affectée(s). N'oubliez pas de vérifier les tables dans l'onglet Schémas.")
                 else:
                     results = cursor.fetchall()
                     column_names = [description[0] for description in cursor.description]
@@ -453,7 +465,7 @@ def show_query_tester(conn, db_type):
         if 'query_history' not in st.session_state:
             st.session_state.query_history = []
         
-        if query not in st.session_state.query_history and query != default_query:
+        if query not in st.session_state.query_history and query.strip() not in ["", default_query.strip()]:
             st.session_state.query_history.insert(0, query)
             st.session_state.query_history = st.session_state.query_history[:5] # Limiter à 5
 
@@ -503,7 +515,12 @@ def show_exercises(conn, db_type):
                 for table_name, data in schema_data["tables"].items():
                     st.caption(f"Table `{table_name}`")
                     st.code(f"({data['ddl']})", language="sql")
-                    st.dataframe(pd.read_sql_query(f"SELECT * FROM {table_name}", conn).head(5), use_container_width=True)
+                    # Utiliser conn.cursor().execute() plutôt que read_sql_query pour la robustesse après des DML
+                    cursor = conn.cursor()
+                    cursor.execute(f"SELECT * FROM {table_name} LIMIT 5")
+                    cols = [desc[0] for desc in cursor.description]
+                    df_sample = pd.DataFrame(cursor.fetchall(), columns=cols)
+                    st.dataframe(df_sample, use_container_width=True)
 
         # Zone de saisie pour la solution
         user_solution = st.text_area(f"Votre solution SQL pour '{exercise['title']}' :", height=120, key="exercise_solution_input")
